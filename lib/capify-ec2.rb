@@ -293,14 +293,10 @@ class CapifyEc2
   end
 
   def register_instance_in_elb(instance_name, load_balancer_name = '')
-    # This method also registers the instance in an equivalently named ALB.
     return if !@ec2_config[:load_balanced]
     instance = get_instance_by_name(instance_name)
     return if instance.nil?
-    # If instance is in EC2 classic then skip the ALB registration
-    if is_vpc_instance? instance
-        # Add instance to ALB target group attached to ALB with same name as ELB
-    end
+    load_balancer =  get_load_balancer_by_name(load_balancer_name) || @@load_balancer
     return if load_balancer.nil?
 
     elb.register_instances_with_load_balancer(instance.id, load_balancer.id)
