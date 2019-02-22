@@ -323,6 +323,11 @@ class CapifyEc2
     end
   end
 
+  def deregister_instance_from_target_groups_by_dns(server_dns, target_group_names)
+    # Stubbed method
+    # Return `target_groups_to_reregister`
+  end
+
   def deregister_instance_from_named_elbs_by_dns(server_dns, load_balancer_names)
     instance = get_instance_by_dns(server_dns)
 
@@ -368,6 +373,11 @@ class CapifyEc2
       return [load_balancer]
     end
     false
+  end
+
+  def reregister_instance_with_target_group_by_dns(server_dns, target_group, timeout)
+    # Stubbed method
+    # Return `reregistered`
   end
 
   def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
