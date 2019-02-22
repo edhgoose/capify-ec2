@@ -122,12 +122,18 @@ Capistrano::Configuration.instance(:must_exist).load do
         roles.clear
 
         load_balancers_to_reregister = [] # Set to empty again here, to ensure it always starts off empty for every iteration.
+        target_groups_to_reregister = []
         is_load_balanced = false
         load_balancer_names = false
+        target_group_names = nil
 
         server_roles.each do |a_role|
           role a_role, server_dns, all_options[a_role][server_dns]
           is_load_balanced = true if all_options[a_role][server_dns][:load_balanced]
+
+          if all_options[a_role][server_dns].key?('target_group_names')
+            target_group_names = all_options[a_role][server_dns][:target_group_names]
+          end
 
           if all_options[a_role][server_dns][:elb_names]
             load_balancer_names = all_options[a_role][server_dns][:elb_names]
@@ -138,6 +144,10 @@ Capistrano::Configuration.instance(:must_exist).load do
         puts "[Capify-EC2] (#{index+1} of #{all_servers.length}) Beginning deployment to #{instance_dns_with_name_tag(server_dns)} with #{server_roles.count > 1 ? 'roles' : 'role'} '#{server_roles.join(', ')}'...".bold
 
         if is_load_balanced && !dry_run
+          if target_group_names
+            target_groups_to_reregister = capify_ec2.deregister_instance_from_target_groups_by_dns(server_dns, target_group_names)
+          end
+
           if load_balancer_names
             load_balancers_to_reregister = capify_ec2.deregister_instance_from_named_elbs_by_dns(server_dns, load_balancer_names)
           else
@@ -192,6 +202,20 @@ Capistrano::Configuration.instance(:must_exist).load do
           end
         end
 
+        for target_group_to_reregister in target_group_to_reregister do
+          threads << Thread.new(target_group_to_reregister) do |tg|
+            puts "[Capify-EC2] Starting registration of ALB Target Group '#{tg.id}'"
+            
+            reregistered = capify_ec2.reregister_instance_with_target_group_by_dns(server_dns, tg, 60)
+            if reregistered
+              puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg.id}' successful.".green.bold
+            else
+              puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg.id}' failed!".red.bold
+              raise CapifyEC2RollingDeployError.new("ALB Target Group registration timeout exceeded", server_dns)
+            end  
+          end
+        end
+
         for t in threads do
           t.join
         end
@@ -204,8 +228,13 @@ Capistrano::Configuration.instance(:must_exist).load do
       failed_deploys << e.dns
       puts "[Capify-EC2]"
       puts "[Capify-EC2] Deployment aborted due to error: #{e}!".red.bold
+
       puts "[Capify-EC2]" if load_balancer_to_reregister
       puts "[Capify-EC2] Note: Instance '#{instance_dns_with_name_tag(e.dns)}' was removed from the ELB '#{load_balancer_to_reregister.id}' and should be manually checked and reregistered.".red.bold if load_balancer_to_reregister
+
+      puts "[Capify-EC2]" if target_group_to_reregister
+      puts "[Capify-EC2] Note: Instance '#{instance_dns_with_name_tag(e.dns)}' was removed from the ALB Target Group '#{target_group_to_reregister.id}' and should be manually checked and reregistered.".red.bold if target_group_to_reregister
+
 
       rolling_deploy_status(all_servers, successful_deploys, failed_deploys)
       exit 1
@@ -213,8 +242,12 @@ Capistrano::Configuration.instance(:must_exist).load do
       failed_deploys << roles.values.first.servers.first.host
       puts "[Capify-EC2]"
       puts "[Capify-EC2] Deployment aborted due to error: #{e}!".red.bold
+
       puts "[Capify-EC2]" if load_balancer_to_reregister
       puts "[Capify-EC2] Note: Instance '#{instance_dns_with_name_tag(roles.values.first.servers.first.host)}' was removed from the ELB '#{load_balancer_to_reregister.id}' and should be manually checked and reregistered.".red.bold if load_balancer_to_reregister
+
+      puts "[Capify-EC2]" if target_group_to_reregister
+      puts "[Capify-EC2] Note: Instance '#{instance_dns_with_name_tag(roles.values.first.servers.first.host)}' was removed from the ALB Target Group '#{target_group_to_reregister.id}' and should be manually checked and reregistered.".red.bold if target_group_to_reregister
 
       rolling_deploy_status(all_servers, successful_deploys, failed_deploys)
       exit 1
