@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 require 'rubygems'
+require 'aws-sdk'
 require 'fog'
 require 'colored'
 require 'net/http'
@@ -29,6 +30,10 @@ class CapifyEc2
     end
     @ec2_config[:stage] = stage
 
+    # Open connections to AWS with the SDK
+    alb_client = Aws::ElasticLoadBalancingV2::Client.new(region: 'eu-west-1')
+    ec2_client = Aws::EC2::Client.new(region: 'eu-west-1')
+
     # Maintain backward compatibility with previous config format
     @ec2_config[:project_tags] ||= []
     # User can change the Project tag string
@@ -46,6 +51,10 @@ class CapifyEc2
 
     @instances = []
     @elbs = elb.load_balancers
+
+    # With ALBs, we are only interested in the target groups that contain
+    # instances.
+    @alb_target_groups = alb_client.describe_target_groups()
 
     regions.each do |region|
       begin
@@ -236,6 +245,12 @@ class CapifyEc2
     desired_instances.select {|instance| instance.availability_zone.match(region) && instance.tags[@ec2_config[:aws_roles_tag]].split(%r{,\s*}).include?(roles.to_s) rescue false}
   end
 
+  def is_vpc_instance?(instance_id)
+    # Determine if instance is based in VPC or classic
+    vpc_id = ec2.describe_instances({instance_ids: [instance_id]}).reservations[0].instances[0].vpc_id
+    vpc_id
+  end
+
   def get_instance_by_name(name)
     desired_instances.select {|instance| instance.name == name}.first
   end
@@ -279,10 +294,14 @@ class CapifyEc2
   end
 
   def register_instance_in_elb(instance_name, load_balancer_name = '')
+    # This method also registers the instance in an equivalently named ALB.
     return if !@ec2_config[:load_balanced]
     instance = get_instance_by_name(instance_name)
     return if instance.nil?
-    load_balancer =  get_load_balancer_by_name(load_balancer_name) || @@load_balancer
+    # If instance is in EC2 classic then skip the ALB registration
+    if is_vpc_instance? instance
+        # Add instance to ALB target group attached to ALB with same name as ELB
+    end
     return if load_balancer.nil?
 
     elb.register_instances_with_load_balancer(instance.id, load_balancer.id)
