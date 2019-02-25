@@ -203,7 +203,7 @@ Capistrano::Configuration.instance(:must_exist).load do
           end
         end
 
-        for target_group_to_reregister in target_group_to_reregister do
+        for target_group_to_reregister in target_groups_to_reregister do
           threads << Thread.new(target_group_to_reregister) do |tg|
             puts "[Capify-EC2] Starting registration of ALB Target Group '#{tg.id}'"
             
