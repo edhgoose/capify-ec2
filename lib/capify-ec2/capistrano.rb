@@ -107,6 +107,7 @@ Capistrano::Configuration.instance(:must_exist).load do
 
     # Here outside of the scope of the rescue so we can refer to it if a general exception is raised.
     load_balancer_to_reregister = nil
+    target_group_to_reregister = nil
 
     begin
 
