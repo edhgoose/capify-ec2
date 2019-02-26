@@ -321,8 +321,10 @@ class CapifyEc2
 
   def deregister_instance_from_target_groups_by_dns(server_dns, target_group_names)
     instance = get_instance_by_dns(server_dns)
+    deregistered_target_groups = []
 
     for target_group in target_group_names do
+        puts "[Capify-EC2] Removing instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
         # Instance deregistration requires the ALB target group ARN and the instance ID
         # Obtain target group ARN from target group name assuming the name is unique.
         target_group_arn = alb_client.describe_target_groups({
@@ -343,14 +345,16 @@ class CapifyEc2
 
         # During deregistration we would expect to see a state of
         # unhealthy, unused, draining or unavailable.
-        if %w(unhealthy unused draining unavailable).include? response.target_health_descriptions[0].target_health.state
-            # We're good
-            puts 'happy'
+        if %w(unhealthy unused draining unavailable).include?(response.target_health_descriptions[0].target_health.state)
+            puts "[Capify-EC2] Successfully removed '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
+            deregistered_target_groups << target_group
         else
-            puts 'unhappy'
+            puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance}') from target group '#{target_group}'"
+            puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+            puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
         end
     end
-    # Return `target_groups_to_reregister`
+  deregistered_target_groups
   end
 
   def deregister_instance_from_named_elbs_by_dns(server_dns, load_balancer_names)
@@ -422,6 +426,19 @@ class CapifyEc2
         })
 
         # Verify instance is attached
+
+        # During registration we would expect to see a state of
+        # initial or healthy.
+        if %w(initial healthy).include?(response.target_health_descriptions[0].target_health.state)
+            puts "[Capify-EC2] Successfully registered '#{server_dns}' ('#{instance}') to target group '#{target_group}'..."
+            reregistered_target_groups << target_group
+        else
+            puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance}') to target group '#{target_group}'"
+            puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+            puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
+        end
+    end
+  reregistered_target_groups
 
     end
   end
