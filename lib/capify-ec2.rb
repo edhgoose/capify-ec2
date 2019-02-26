@@ -32,6 +32,8 @@ class CapifyEc2
 
     # Open connections to AWS with the SDK
     alb_client = Aws::ElasticLoadBalancingV2::Client.new(region: 'eu-west-1')
+    # Used for determining if an instance is in VPC
+    ec2_client = Aws::EC2::Client.new(region: 'eu-west-1')
 
     # Maintain backward compatibility with previous config format
     @ec2_config[:project_tags] ||= []
