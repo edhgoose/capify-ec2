@@ -432,9 +432,6 @@ class CapifyEc2
         puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
         return []
     end
-
-    # Sleep, but why?
-    sleep 10
     
     puts "[Capify-EC2] Re-registering instance with ALB target group '#{target_group}'..."
 
@@ -473,8 +470,6 @@ class CapifyEc2
         puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
         return []
     end
-
-    sleep 10
 
     puts "[Capify-EC2] Re-registering instance with ELB '#{load_balancer.id}'..."
     result = elb.register_instances_with_load_balancer(instance.id, load_balancer.id)
