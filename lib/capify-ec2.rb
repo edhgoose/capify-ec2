@@ -295,6 +295,13 @@ class CapifyEc2
     return if !@ec2_config[:load_balanced]
     instance = get_instance_by_name(instance_name)
     return if instance.nil?
+
+    # Check if the instance is a VPC instance, return if it is
+    if is_vpc_instance?(instance)
+        puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
+        return []
+    end
+
     load_balancer =  get_load_balancer_by_name(load_balancer_name) || @@load_balancer
     return if load_balancer.nil?
 
@@ -320,6 +327,13 @@ class CapifyEc2
 
   def deregister_instance_from_target_groups_by_dns(server_dns, target_group_names)
     instance = get_instance_by_dns(server_dns)
+
+    # Check if the instance is a VPC instance, if not return
+    if not is_vpc_instance?(instance)
+        puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target groups..."
+        return []
+    end
+
     deregistered_target_groups = []
 
     for target_group in target_group_names do
@@ -358,6 +372,13 @@ class CapifyEc2
 
   def deregister_instance_from_named_elbs_by_dns(server_dns, load_balancer_names)
     instance = get_instance_by_dns(server_dns)
+
+    # Check if the instance is a VPC instance, return if it is
+    if is_vpc_instance?(instance)
+        puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB deregistration..."
+        return []
+    end
+
 
     lbs = []
     threads = []
@@ -406,42 +427,52 @@ class CapifyEc2
   def reregister_instance_with_target_group_by_dns(server_dns, target_group, timeout)
     instance = get_instance_by_dns(server_dns)
 
+    # Check if the instance is a VPC instance, if not return
+    if not is_vpc_instance?(instance)
+        puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
+        return []
+    end
+
     # Sleep, but why?
     sleep 10
     
-    for target_group in target_group_names do
-        puts "[Capify-EC2] Re-registering instance with ALB target group '#{target_group}'..."
+    puts "[Capify-EC2] Re-registering instance with ALB target group '#{target_group}'..."
 
-        # Instance registration requires the ALB target group ARN and the instance ID
-        # Obtain target group ARN from target group name assuming the name is unique.
-        target_group_arn = alb_client.describe_target_groups({
-            names: [target_group],
-        })['TargetGroups'][0]['TargetGroupArn']
+    # Instance registration requires the ALB target group ARN and the instance ID
+    # Obtain target group ARN from target group name assuming the name is unique.
+    target_group_arn = alb_client.describe_target_groups({
+        names: [target_group],
+    })['TargetGroups'][0]['TargetGroupArn']
 
-        # Register the instance with the target group ARN
-        client.register_targets({
-            target_group_arn: target_group_arn,
-            targets: [ { id: instance } ]
-        })
+    # Register the instance with the target group ARN
+    client.register_targets({
+        target_group_arn: target_group_arn,
+        targets: [ { id: instance } ]
+    })
 
-        # Verify instance is attached
+    # Verify instance is attached
 
-        # During registration we would expect to see a state of
-        # initial or healthy.
-        if %w(initial healthy).include?(response.target_health_descriptions[0].target_health.state)
-            puts "[Capify-EC2] Successfully registered '#{server_dns}' ('#{instance}') to target group '#{target_group}'..."
-            reregistered_target_groups << target_group
-        else
-            puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance}') to target group '#{target_group}'"
-            puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
-            puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
-        end
+    # During registration we would expect to see a state of
+    # initial or healthy.
+    if %w(initial healthy).include?(response.target_health_descriptions[0].target_health.state)
+        puts "[Capify-EC2] Successfully registered '#{server_dns}' ('#{instance}') to target group '#{target_group}'..."
+        reregistered_target_groups << target_group
+    else
+        puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance}') to target group '#{target_group}'"
+        puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+        puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
     end
   reregistered_target_groups
   end
 
   def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
     instance = get_instance_by_dns(server_dns)
+
+    # Check if the instance is a VPC instance, if not return
+    if is_vpc_instance?(instance)
+        puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
+        return []
+    end
 
     sleep 10
 
