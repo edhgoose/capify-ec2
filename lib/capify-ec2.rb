@@ -32,7 +32,6 @@ class CapifyEc2
 
     # Open connections to AWS with the SDK
     alb_client = Aws::ElasticLoadBalancingV2::Client.new(region: 'eu-west-1')
-    ec2_client = Aws::EC2::Client.new(region: 'eu-west-1')
 
     # Maintain backward compatibility with previous config format
     @ec2_config[:project_tags] ||= []
@@ -439,8 +438,6 @@ class CapifyEc2
         end
     end
   reregistered_target_groups
-
-    end
   end
 
   def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
