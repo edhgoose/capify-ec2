@@ -248,7 +248,7 @@ class CapifyEc2
 
   def is_vpc_instance?(instance_id)
     # Determine if instance is based in VPC or classic
-    ec2_client.describe_instances({instance_ids: [instance_id]}).reservations[0].instances[0].vpc_id
+    @ec2_client.describe_instances({instance_ids: [instance_id]}).reservations[0].instances[0].vpc_id
   end
 
   def get_instance_by_name(name)
