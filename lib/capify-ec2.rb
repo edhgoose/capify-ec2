@@ -320,7 +320,36 @@ class CapifyEc2
   end
 
   def deregister_instance_from_target_groups_by_dns(server_dns, target_group_names)
-    # Stubbed method
+    instance = get_instance_by_dns(server_dns)
+
+    for target_group in target_group_names do
+        # Instance deregistration requires the ALB target group ARN and the instance ID
+        # Obtain target group ARN from target group name assuming the name is unique.
+        target_group_arn = alb_client.describe_target_groups({
+            names: [target_group],
+        })['TargetGroups'][0]['TargetGroupArn']
+
+        # Deregister the instance with the target group ARN
+        client.deregister_targets({
+            target_group_arn: target_group_arn,
+            targets: [ { id: instance } ]
+        })
+
+        # Verify the instance is no longer in the target group
+        response = alb_client.describe_target_health({
+            target_group_arn: target_group_arn,
+            targets: [ { id: instance } ]
+        })
+
+        # During deregistration we would expect to see a state of
+        # unhealthy, unused, draining or unavailable.
+        if %w(unhealthy unused draining unavailable).include? response.target_health_descriptions[0].target_health.state
+            # We're good
+            puts 'happy'
+        else
+            puts 'unhappy'
+        end
+    end
     # Return `target_groups_to_reregister`
   end
 
@@ -372,8 +401,29 @@ class CapifyEc2
   end
 
   def reregister_instance_with_target_group_by_dns(server_dns, target_group, timeout)
-    # Stubbed method
-    # Return `reregistered`
+    instance = get_instance_by_dns(server_dns)
+
+    # Sleep, but why?
+    sleep 10
+    
+    for target_group in target_group_names do
+        puts "[Capify-EC2] Re-registering instance with ALB target group '#{target_group}'..."
+
+        # Instance registration requires the ALB target group ARN and the instance ID
+        # Obtain target group ARN from target group name assuming the name is unique.
+        target_group_arn = alb_client.describe_target_groups({
+            names: [target_group],
+        })['TargetGroups'][0]['TargetGroupArn']
+
+        # Register the instance with the target group ARN
+        client.register_targets({
+            target_group_arn: target_group_arn,
+            targets: [ { id: instance } ]
+        })
+
+        # Verify instance is attached
+
+    end
   end
 
   def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
