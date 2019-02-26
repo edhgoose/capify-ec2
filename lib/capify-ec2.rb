@@ -62,7 +62,7 @@ class CapifyEc2
         puts "[Capify-EC2] Unable to connect to AWS: #{e}.".red.bold
         exit 1
       end
-      
+
       servers.each do |server|
         @instances << server if server.ready?
       end
@@ -125,7 +125,7 @@ class CapifyEc2
     info_label_width = [@ec2_config[:aws_project_tag], @ec2_config[:aws_stages_tag]].map(&:length).max
     puts "#{@ec2_config[:aws_project_tag].rjust( info_label_width ).bold}: #{@ec2_config[:project_tags].join(', ')}." if @ec2_config[:project_tags].any?
     puts "#{@ec2_config[:aws_stages_tag].rjust( info_label_width ).bold}: #{@ec2_config[:stage]}." unless @ec2_config[:stage].to_s.empty?
-    
+
     # Title row.
     status_output = []
     status_output << 'Num'                                                         .bold
@@ -139,7 +139,7 @@ class CapifyEc2
     status_output << @ec2_config[:aws_options_tag].ljust( column_widths[:options] ).bold if options_present
     status_output << 'CPU'                       .ljust( 16                      ).bold if graph
     puts status_output.join("   ")
-    
+
     desired_instances.each_with_index do |instance, i|
       status_output = []
       status_output << "%02d:" % i
@@ -163,7 +163,7 @@ class CapifyEc2
     end
     puts "Elastic Load Balancers".bold
     puts "#{@ec2_config[:aws_project_tag].bold}: #{@ec2_config[:project_tags].join(', ')}." if @ec2_config[:project_tags].any?
-    
+
     # Set minimum widths for the variable length lb attributes.
     column_widths = { :id_min => 4, :dns_min => 4, :zone_min => 5}
 
@@ -182,7 +182,7 @@ class CapifyEc2
     elbs_found_for_project = false
 
     @elbs.each_with_index do |lb, i|
-      
+
       status_output = []
       sub_output    = []
       lb.instances.each do |instance|
@@ -209,7 +209,7 @@ class CapifyEc2
         status_output << (lb.id || '')                   .ljust( column_widths[:id]   ).green
         status_output << lb.dns_name                     .ljust( column_widths[:dns]  ).blue.bold
         status_output << lb.availability_zones.join(",") .ljust( column_widths[:zone] ).magenta
-      
+
         puts status_output.join("   ")
         puts sub_output.join("\n")
       end
@@ -298,8 +298,8 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, return if it is
     if is_vpc_instance?(instance)
-        puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
-        return []
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
+      return []
     end
 
     load_balancer =  get_load_balancer_by_name(load_balancer_name) || @@load_balancer
@@ -330,44 +330,60 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, if not return
     if not is_vpc_instance?(instance)
-        puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target groups..."
-        return []
+      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target groups..."
+      return []
     end
 
     deregistered_target_groups = []
 
     for target_group in target_group_names do
-        puts "[Capify-EC2] Removing instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
-        # Instance deregistration requires the ALB target group ARN and the instance ID
-        # Obtain target group ARN from target group name assuming the name is unique.
-        target_group_arn = alb_client.describe_target_groups({
-            names: [target_group],
-        })['TargetGroups'][0]['TargetGroupArn']
+      puts "[Capify-EC2] Removing instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
+      # Instance deregistration requires the ALB target group ARN and the instance ID
+      # Obtain target group ARN from target group name assuming the name is unique.
+      target_group_arn = alb_client.describe_target_groups({
+        names: [target_group],
+      })['TargetGroups'][0]['TargetGroupArn']
 
-        # Deregister the instance with the target group ARN
-        client.deregister_targets({
-            target_group_arn: target_group_arn,
-            targets: [ { id: instance } ]
-        })
+      # Deregister the instance with the target group ARN
+      client.deregister_targets({
+        target_group_arn: target_group_arn,
+        targets: [ { id: instance } ]
+      })
 
-        # Verify the instance is no longer in the target group
-        response = alb_client.describe_target_health({
-            target_group_arn: target_group_arn,
-            targets: [ { id: instance } ]
-        })
+      # Loop until instance is deregistered or timeout is reached
+      begin
+        Timeout::timeout(options[:timeout]) do
+          begin
+            # Verify the instance is no longer in the target group
+            response = alb_client.describe_target_health({
+              target_group_arn: target_group_arn,
+              targets: [ { id: instance } ]
+            })
 
-        # During deregistration we would expect to see a state of
-        # unhealthy, unused, draining or unavailable.
-        if %w(unhealthy unused draining unavailable).include?(response.target_health_descriptions[0].target_health.state)
+            # Instance is deregistered when state == unused
+            state = response.target_health_descriptions[0].target_health.state
+            raise state unless state == 'unused'
+
+            # Instance is in unused state, mark as a successful removal
             puts "[Capify-EC2] Successfully removed '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
             deregistered_target_groups << target_group
-        else
-            puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance}') from target group '#{target_group}'"
-            puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
-            puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
+
+          rescue
+            # Instance is still attached, retrying after 1s sleep until timeout reached
+            puts "[Capify-EC2] Instance #{instance} is currently in state #{state}, retring..."
+            sleep 1
+            retry
+          end
         end
+
+      rescue Timeout::Error
+        # Instance failed to reach unused state within the timeout
+        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance}') from target group '#{target_group}'"
+        puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+        puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
+      end
     end
-  deregistered_target_groups
+    deregistered_target_groups
   end
 
   def deregister_instance_from_named_elbs_by_dns(server_dns, load_balancer_names)
@@ -375,8 +391,8 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, return if it is
     if is_vpc_instance?(instance)
-        puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB deregistration..."
-        return []
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB deregistration..."
+      return []
     end
 
 
@@ -429,37 +445,57 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, if not return
     if not is_vpc_instance?(instance)
-        puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
-        return []
+      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
+      return []
     end
-    
+
     puts "[Capify-EC2] Re-registering instance with ALB target group '#{target_group}'..."
 
     # Instance registration requires the ALB target group ARN and the instance ID
     # Obtain target group ARN from target group name assuming the name is unique.
     target_group_arn = alb_client.describe_target_groups({
-        names: [target_group],
+      names: [target_group],
     })['TargetGroups'][0]['TargetGroupArn']
 
     # Register the instance with the target group ARN
     client.register_targets({
-        target_group_arn: target_group_arn,
-        targets: [ { id: instance } ]
+      target_group_arn: target_group_arn,
+      targets: [ { id: instance } ]
     })
 
-    # Verify instance is attached
+    # Loop until instance is registered and healthy or timeout is reached
+    begin
+      Timeout::timeout(options[:timeout]) do
+        begin
+          # Verify the instance is healthy
+          response = alb_client.describe_target_health({
+            target_group_arn: target_group_arn,
+            targets: [ { id: instance } ]
+          })
 
-    # During registration we would expect to see a state of
-    # initial or healthy.
-    if %w(initial healthy).include?(response.target_health_descriptions[0].target_health.state)
-        puts "[Capify-EC2] Successfully registered '#{server_dns}' ('#{instance}') to target group '#{target_group}'..."
-        reregistered_target_groups << target_group
-    else
-        puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance}') to target group '#{target_group}'"
-        puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
-        puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
+          # Instance is healthy when state == healthy
+          state = response.target_health_descriptions[0].target_health.state
+          raise state unless state == 'healthy'
+
+          # Instance is in healthy state, mark as a successful
+          puts "[Capify-EC2] Successfully added '#{server_dns}' ('#{instance}') to target group '#{target_group}'..."
+          reregistered_target_groups << target_group
+
+        rescue
+          # Instance is not healthy, retrying after 1s sleep until timeout reached
+          puts "[Capify-EC2] Instance #{instance} is currently in state #{state}, retring..."
+          sleep 1
+          retry
+        end
+      end
+
+    rescue Timeout::Error
+      # Instance failed to become healthy within timeout
+      puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance}') to target group '#{target_group}'"
+      puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+      puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
     end
-  reregistered_target_groups
+    reregistered_target_groups
   end
 
   def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
@@ -467,8 +503,8 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, if not return
     if is_vpc_instance?(instance)
-        puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
-        return []
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
+      return []
     end
 
     puts "[Capify-EC2] Re-registering instance with ELB '#{load_balancer.id}'..."
@@ -489,7 +525,8 @@ class CapifyEc2
           retry
         end
       end
-    rescue Timeout::Error => e
+    rescue Timeout::Error
+      puts "[Capify-EC2] Instance '#{instance}' failed to reach 'InService' state within timeout."
     end
     state ? state == 'InService' : false
   end
@@ -513,8 +550,8 @@ class CapifyEc2
     http = Net::HTTP.new(uri.host, uri.port)
 
     if uri.scheme == 'https'
-     http.use_ssl = true
-     http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+      http.use_ssl = true
+      http.verify_mode = OpenSSL::SSL::VERIFY_NONE
     end
 
     result = nil
@@ -534,7 +571,8 @@ class CapifyEc2
           retry
         end
       end
-    rescue Timeout::Error => e
+    rescue Timeout::Error
+      puts "[Capify-EC2] Instance '#{instance}' failed to healthcheck within timeout."
     end
     result ? response_matches_expected?(result.body, expected_response) : false
   end
