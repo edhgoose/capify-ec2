@@ -349,7 +349,7 @@ class CapifyEc2
       # Deregister the instance with the target group ARN
       @alb_client.deregister_targets({
         target_group_arn: target_group_arn,
-        targets: [ { id: instance } ]
+        targets: [ { id: instance.id } ]
       })
 
       # Loop until instance is deregistered or timeout is reached
@@ -359,7 +359,7 @@ class CapifyEc2
             # Verify the instance is no longer in the target group
             response = @alb_client.describe_target_health({
               target_group_arn: target_group_arn,
-              targets: [ { id: instance } ]
+              targets: [ { id: instance.id } ]
             })
 
             # Instance is deregistered when state == unused
@@ -462,7 +462,7 @@ class CapifyEc2
     # Register the instance with the target group ARN
     @alb_client.register_targets({
       target_group_arn: target_group_arn,
-      targets: [ { id: instance } ]
+      targets: [ { id: instance.id } ]
     })
 
     # Loop until instance is registered and healthy or timeout is reached
@@ -472,7 +472,7 @@ class CapifyEc2
           # Verify the instance is healthy
           response = @alb_client.describe_target_health({
             target_group_arn: target_group_arn,
-            targets: [ { id: instance } ]
+            targets: [ { id: instance.id } ]
           })
 
           # Instance is healthy when state == healthy
