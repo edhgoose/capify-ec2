@@ -347,16 +347,47 @@ class CapifyEc2
       })['target_groups'][0]['target_group_arn']
 
       # Deregister the instance with the target group ARN
-      result = @alb_client.deregister_targets({
+      @alb_client.deregister_targets({
         target_group_arn: target_group_arn,
         targets: [ { id: instance.id } ]
       })
 
-      raise "Unable to remove instance from ELB '#{load_balancer.id}'..." unless result#successful
+      # Loop until instance is deregistered or timeout is reached
+      begin
+        Timeout::timeout(options[:timeout]) do
+          begin
+            # Verify the instance is no longer in the target group
+            response = alb_client.describe_target_health({
+              target_group_arn: target_group_arn,
+              targets: [ { id: instance.id } ]
+            })
 
-      deregistered_target_groups << target_group
+            # Instance is deregistered when state == unused or draining
+            # NOTE: A draining instance is still in active use, this should be
+            # refactored out when the pipeline is next reviewed.
+            state = response.target_health_descriptions[0].target_health.state
+            raise state unless state == 'unused' or state == 'draining'
+
+            # Instance is in unused or draining state, mark as a successful removal
+            puts "[Capify-EC2] Instance '#{server_dns}' ('#{instance.id}') is in state #{state}."
+            puts "[Capify-EC2] Successfully removed '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
+            deregistered_target_groups << target_group
+
+          rescue
+            # Instance is still attached, retrying after 1s sleep until timeout reached
+            puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retring..."
+            sleep 1
+            retry
+          end
+        end
+
+      rescue Timeout::Error
+        # Instance failed to reach unused state within the timeout
+        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance}') from target group '#{target_group}'"
+        puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+        puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
+      end
     end
-
     deregistered_target_groups
   end
 
