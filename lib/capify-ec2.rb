@@ -344,10 +344,10 @@ class CapifyEc2
       # Obtain target group ARN from target group name assuming the name is unique.
       target_group_arn = @alb_client.describe_target_groups({
         names: [target_group],
-      })['TargetGroups'][0]['TargetGroupArn']
+      })['target_groups'][0]['target_group_arn']
 
       # Deregister the instance with the target group ARN
-      client.deregister_targets({
+      @alb_client.deregister_targets({
         target_group_arn: target_group_arn,
         targets: [ { id: instance } ]
       })
@@ -457,10 +457,10 @@ class CapifyEc2
     # Obtain target group ARN from target group name assuming the name is unique.
     target_group_arn = @alb_client.describe_target_groups({
       names: [target_group],
-    })['TargetGroups'][0]['TargetGroupArn']
+    })['target_groups'][0]['target_group_arn']
 
     # Register the instance with the target group ARN
-    client.register_targets({
+    @alb_client.register_targets({
       target_group_arn: target_group_arn,
       targets: [ { id: instance } ]
     })
