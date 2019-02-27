@@ -457,7 +457,7 @@ class CapifyEc2
 
         rescue
           # Instance is not healthy, retrying after 1s sleep until timeout reached
-          puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retring..."
+          puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retrying..."
           sleep 1
           retry
         end
