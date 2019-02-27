@@ -357,7 +357,7 @@ class CapifyEc2
         Timeout::timeout(options[:timeout]) do
           begin
             # Verify the instance is no longer in the target group
-            response = alb_client.describe_target_health({
+            response = @alb_client.describe_target_health({
               target_group_arn: target_group_arn,
               targets: [ { id: instance.id } ]
             })
@@ -383,7 +383,7 @@ class CapifyEc2
 
       rescue Timeout::Error
         # Instance failed to reach unused state within the timeout
-        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance}') from target group '#{target_group}'"
+        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'"
         puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
         puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
       end
