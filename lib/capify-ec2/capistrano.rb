@@ -126,13 +126,13 @@ Capistrano::Configuration.instance(:must_exist).load do
         target_groups_to_reregister = []
         is_load_balanced = false
         load_balancer_names = false
-        target_group_names = nil
+        target_group_names = false
 
         server_roles.each do |a_role|
           role a_role, server_dns, all_options[a_role][server_dns]
           is_load_balanced = true if all_options[a_role][server_dns][:load_balanced]
-
-          if all_options[a_role][server_dns].key?('target_group_names')
+          
+          if all_options[a_role][server_dns][:target_group_names]
             target_group_names = all_options[a_role][server_dns][:target_group_names]
           end
 
@@ -145,6 +145,7 @@ Capistrano::Configuration.instance(:must_exist).load do
         puts "[Capify-EC2] (#{index+1} of #{all_servers.length}) Beginning deployment to #{instance_dns_with_name_tag(server_dns)} with #{server_roles.count > 1 ? 'roles' : 'role'} '#{server_roles.join(', ')}'...".bold
 
         if is_load_balanced && !dry_run
+          
           if target_group_names
             target_groups_to_reregister = capify_ec2.deregister_instance_from_target_groups_by_dns(server_dns, target_group_names)
           end
@@ -157,7 +158,7 @@ Capistrano::Configuration.instance(:must_exist).load do
         end
 
         # Call the standard 'cap deploy' task with our redefined role containing a single server.
-        top.deploy.default
+      #  top.deploy.default
 
         server_roles.each do |a_role|
 
@@ -192,28 +193,28 @@ Capistrano::Configuration.instance(:must_exist).load do
         for load_balancer_to_reregister in load_balancers_to_reregister do
           threads << Thread.new(load_balancer_to_reregister) do |lb|
             puts "[Capify-EC2] Starting registration of ELB '#{lb.id}'"
-            
+
             reregistered = capify_ec2.reregister_instance_with_elb_by_dns(server_dns, lb, 60)
             if reregistered
               puts "[Capify-EC2] Instance registration with ELB '#{lb.id}' successful.".green.bold
             else
               puts "[Capify-EC2] Instance registration with ELB '#{lb.id}' failed!".red.bold
               raise CapifyEC2RollingDeployError.new("ELB registration timeout exceeded", server_dns)
-            end  
+            end
           end
         end
 
         for target_group_to_reregister in target_groups_to_reregister do
           threads << Thread.new(target_group_to_reregister) do |tg|
             puts "[Capify-EC2] Starting registration of ALB Target Group '#{tg.id}'"
-            
+
             reregistered = capify_ec2.reregister_instance_with_target_group_by_dns(server_dns, tg, 60)
             if reregistered
               puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg.id}' successful.".green.bold
             else
               puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg.id}' failed!".red.bold
               raise CapifyEC2RollingDeployError.new("ALB Target Group registration timeout exceeded", server_dns)
-            end  
+            end
           end
         end
 

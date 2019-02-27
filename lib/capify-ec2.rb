@@ -31,7 +31,7 @@ class CapifyEc2
     @ec2_config[:stage] = stage
 
     # Open connections to AWS with the SDK
-    alb_client = Aws::ElasticLoadBalancingV2::Client.new(region: 'eu-west-1')
+    @alb_client = Aws::ElasticLoadBalancingV2::Client.new(region: 'eu-west-1')
     # Used for determining if an instance is in VPC
     @ec2_client = Aws::EC2::Client.new(region: 'eu-west-1')
 
@@ -55,7 +55,7 @@ class CapifyEc2
 
     # With ALBs, we are only interested in the target groups that contain
     # instances.
-    @alb_target_groups = alb_client.describe_target_groups()
+    @alb_target_groups = @alb_client.describe_target_groups()
 
     regions.each do |region|
       begin
@@ -246,9 +246,9 @@ class CapifyEc2
     desired_instances.select {|instance| instance.availability_zone.match(region) && instance.tags[@ec2_config[:aws_roles_tag]].split(%r{,\s*}).include?(roles.to_s) rescue false}
   end
 
-  def is_vpc_instance?(instance_id)
+  def is_vpc_instance?(instance)
     # Determine if instance is based in VPC or classic
-    @ec2_client.describe_instances({instance_ids: [instance_id]}).reservations[0].instances[0].vpc_id
+    @ec2_client.describe_instances({instance_ids: [instance.id]}).reservations[0].instances[0].vpc_id
   end
 
   def get_instance_by_name(name)
@@ -300,7 +300,7 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, return if it is
     if is_vpc_instance?(instance)
-      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance.id}') from ELB registration..."
       return []
     end
 
@@ -332,17 +332,17 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, if not return
     if not is_vpc_instance?(instance)
-      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target groups..."
+      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance.id}') from target groups..."
       return []
     end
 
     deregistered_target_groups = []
 
     for target_group in target_group_names do
-      puts "[Capify-EC2] Removing instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
+      puts "[Capify-EC2] Removing instance '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
       # Instance deregistration requires the ALB target group ARN and the instance ID
       # Obtain target group ARN from target group name assuming the name is unique.
-      target_group_arn = alb_client.describe_target_groups({
+      target_group_arn = @alb_client.describe_target_groups({
         names: [target_group],
       })['TargetGroups'][0]['TargetGroupArn']
 
@@ -357,7 +357,7 @@ class CapifyEc2
         Timeout::timeout(options[:timeout]) do
           begin
             # Verify the instance is no longer in the target group
-            response = alb_client.describe_target_health({
+            response = @alb_client.describe_target_health({
               target_group_arn: target_group_arn,
               targets: [ { id: instance } ]
             })
@@ -367,12 +367,12 @@ class CapifyEc2
             raise state unless state == 'unused'
 
             # Instance is in unused state, mark as a successful removal
-            puts "[Capify-EC2] Successfully removed '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
+            puts "[Capify-EC2] Successfully removed '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
             deregistered_target_groups << target_group
 
           rescue
             # Instance is still attached, retrying after 1s sleep until timeout reached
-            puts "[Capify-EC2] Instance #{instance} is currently in state #{state}, retring..."
+            puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retring..."
             sleep 1
             retry
           end
@@ -380,7 +380,7 @@ class CapifyEc2
 
       rescue Timeout::Error
         # Instance failed to reach unused state within the timeout
-        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance}') from target group '#{target_group}'"
+        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'"
         puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
         puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
       end
@@ -393,7 +393,7 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, return if it is
     if is_vpc_instance?(instance)
-      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB deregistration..."
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance.id}') from ELB deregistration..."
       return []
     end
 
@@ -447,7 +447,7 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, if not return
     if not is_vpc_instance?(instance)
-      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance}') from target group '#{target_group}'..."
+      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
       return []
     end
 
@@ -455,7 +455,7 @@ class CapifyEc2
 
     # Instance registration requires the ALB target group ARN and the instance ID
     # Obtain target group ARN from target group name assuming the name is unique.
-    target_group_arn = alb_client.describe_target_groups({
+    target_group_arn = @alb_client.describe_target_groups({
       names: [target_group],
     })['TargetGroups'][0]['TargetGroupArn']
 
@@ -470,7 +470,7 @@ class CapifyEc2
       Timeout::timeout(options[:timeout]) do
         begin
           # Verify the instance is healthy
-          response = alb_client.describe_target_health({
+          response = @alb_client.describe_target_health({
             target_group_arn: target_group_arn,
             targets: [ { id: instance } ]
           })
@@ -480,12 +480,12 @@ class CapifyEc2
           raise state unless state == 'healthy'
 
           # Instance is in healthy state, mark as a successful
-          puts "[Capify-EC2] Successfully added '#{server_dns}' ('#{instance}') to target group '#{target_group}'..."
+          puts "[Capify-EC2] Successfully added '#{server_dns}' ('#{instance.id}') to target group '#{target_group}'..."
           reregistered_target_groups << target_group
 
         rescue
           # Instance is not healthy, retrying after 1s sleep until timeout reached
-          puts "[Capify-EC2] Instance #{instance} is currently in state #{state}, retring..."
+          puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retring..."
           sleep 1
           retry
         end
@@ -493,7 +493,7 @@ class CapifyEc2
 
     rescue Timeout::Error
       # Instance failed to become healthy within timeout
-      puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance}') to target group '#{target_group}'"
+      puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance.id}') to target group '#{target_group}'"
       puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
       puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
     end
@@ -505,7 +505,7 @@ class CapifyEc2
 
     # Check if the instance is a VPC instance, if not return
     if is_vpc_instance?(instance)
-      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance}') from ELB registration..."
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance.id}') from ELB registration..."
       return []
     end
 
@@ -528,7 +528,7 @@ class CapifyEc2
         end
       end
     rescue Timeout::Error
-      puts "[Capify-EC2] Instance '#{instance}' failed to reach 'InService' state within timeout."
+      puts "[Capify-EC2] Instance '#{instance.id}' failed to reach 'InService' state within timeout."
     end
     state ? state == 'InService' : false
   end
@@ -574,7 +574,7 @@ class CapifyEc2
         end
       end
     rescue Timeout::Error
-      puts "[Capify-EC2] Instance '#{instance}' failed to healthcheck within timeout."
+      puts "[Capify-EC2] Instance '#{instance.id}' failed to healthcheck within timeout."
     end
     result ? response_matches_expected?(result.body, expected_response) : false
   end
