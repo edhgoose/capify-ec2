@@ -347,44 +347,16 @@ class CapifyEc2
       })['target_groups'][0]['target_group_arn']
 
       # Deregister the instance with the target group ARN
-      @alb_client.deregister_targets({
+      result = @alb_client.deregister_targets({
         target_group_arn: target_group_arn,
         targets: [ { id: instance.id } ]
       })
 
-      # Loop until instance is deregistered or timeout is reached
-      begin
-        Timeout::timeout(options[:timeout]) do
-          begin
-            # Verify the instance is no longer in the target group
-            response = @alb_client.describe_target_health({
-              target_group_arn: target_group_arn,
-              targets: [ { id: instance.id } ]
-            })
+      raise "Unable to remove instance from ELB '#{load_balancer.id}'..." unless result#successful
 
-            # Instance is deregistered when state == unused
-            state = response.target_health_descriptions[0].target_health.state
-            raise state unless state == 'unused'
-
-            # Instance is in unused state, mark as a successful removal
-            puts "[Capify-EC2] Successfully removed '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
-            deregistered_target_groups << target_group
-
-          rescue
-            # Instance is still attached, retrying after 1s sleep until timeout reached
-            puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retring..."
-            sleep 1
-            retry
-          end
-        end
-
-      rescue Timeout::Error
-        # Instance failed to reach unused state within the timeout
-        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'"
-        puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
-        puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
-      end
+      deregistered_target_groups << target_group
     end
+
     deregistered_target_groups
   end
 
@@ -467,7 +439,7 @@ class CapifyEc2
 
     # Loop until instance is registered and healthy or timeout is reached
     begin
-      Timeout::timeout(options[:timeout]) do
+      Timeout::timeout(timeout) do
         begin
           # Verify the instance is healthy
           response = @alb_client.describe_target_health({

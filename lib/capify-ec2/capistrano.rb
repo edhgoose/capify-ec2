@@ -131,7 +131,6 @@ Capistrano::Configuration.instance(:must_exist).load do
         server_roles.each do |a_role|
           role a_role, server_dns, all_options[a_role][server_dns]
           is_load_balanced = true if all_options[a_role][server_dns][:load_balanced]
-          
           if all_options[a_role][server_dns][:target_group_names]
             target_group_names = all_options[a_role][server_dns][:target_group_names]
           end
@@ -206,13 +205,13 @@ Capistrano::Configuration.instance(:must_exist).load do
 
         for target_group_to_reregister in target_groups_to_reregister do
           threads << Thread.new(target_group_to_reregister) do |tg|
-            puts "[Capify-EC2] Starting registration of ALB Target Group '#{tg.id}'"
+            puts "[Capify-EC2] Starting registration of ALB Target Group '#{tg}'"
 
             reregistered = capify_ec2.reregister_instance_with_target_group_by_dns(server_dns, tg, 60)
             if reregistered
-              puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg.id}' successful.".green.bold
+              puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg}' successful.".green.bold
             else
-              puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg.id}' failed!".red.bold
+              puts "[Capify-EC2] Instance registration with ALB Target Group '#{tg}' failed!".red.bold
               raise CapifyEC2RollingDeployError.new("ALB Target Group registration timeout exceeded", server_dns)
             end
           end
@@ -249,7 +248,7 @@ Capistrano::Configuration.instance(:must_exist).load do
       puts "[Capify-EC2] Note: Instance '#{instance_dns_with_name_tag(roles.values.first.servers.first.host)}' was removed from the ELB '#{load_balancer_to_reregister.id}' and should be manually checked and reregistered.".red.bold if load_balancer_to_reregister
 
       puts "[Capify-EC2]" if target_group_to_reregister
-      puts "[Capify-EC2] Note: Instance '#{instance_dns_with_name_tag(roles.values.first.servers.first.host)}' was removed from the ALB Target Group '#{target_group_to_reregister.id}' and should be manually checked and reregistered.".red.bold if target_group_to_reregister
+      puts "[Capify-EC2] Note: Instance '#{instance_dns_with_name_tag(roles.values.first.servers.first.host)}' was removed from the ALB Target Group '#{target_group_to_reregister}' and should be manually checked and reregistered.".red.bold if target_group_to_reregister
 
       rolling_deploy_status(all_servers, successful_deploys, failed_deploys)
       exit 1
