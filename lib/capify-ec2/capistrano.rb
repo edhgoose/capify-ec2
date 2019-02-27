@@ -157,7 +157,7 @@ Capistrano::Configuration.instance(:must_exist).load do
         end
 
         # Call the standard 'cap deploy' task with our redefined role containing a single server.
-      #  top.deploy.default
+        top.deploy.default
 
         server_roles.each do |a_role|
 
