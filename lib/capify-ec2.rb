@@ -437,6 +437,8 @@ class CapifyEc2
       targets: [ { id: instance.id } ]
     })
 
+    state = nil
+
     # Loop until instance is registered and healthy or timeout is reached
     begin
       Timeout::timeout(timeout) do
@@ -453,7 +455,6 @@ class CapifyEc2
 
           # Instance is in healthy state, mark as a successful
           puts "[Capify-EC2] Successfully added '#{server_dns}' ('#{instance.id}') to target group '#{target_group}'..."
-          reregistered_target_groups << target_group
 
         rescue
           # Instance is not healthy, retrying after 1s sleep until timeout reached
@@ -469,7 +470,7 @@ class CapifyEc2
       puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
       puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
     end
-    reregistered_target_groups
+    state ? state == 'healthy' : false
   end
 
   def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
