@@ -354,7 +354,7 @@ class CapifyEc2
 
       # Loop until instance is deregistered or timeout is reached
       begin
-        Timeout::timeout(options[:timeout]) do
+        Timeout::timeout(5]) do
           begin
             # Verify the instance is no longer in the target group
             response = @alb_client.describe_target_health({
