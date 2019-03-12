@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 require 'rubygems'
+require 'aws-sdk'
 require 'fog'
 require 'colored'
 require 'net/http'
@@ -29,6 +30,11 @@ class CapifyEc2
     end
     @ec2_config[:stage] = stage
 
+    # Open connections to AWS with the SDK
+    @alb_client = Aws::ElasticLoadBalancingV2::Client.new(region: 'eu-west-1')
+    # Used for determining if an instance is in VPC
+    @ec2_client = Aws::EC2::Client.new(region: 'eu-west-1')
+
     # Maintain backward compatibility with previous config format
     @ec2_config[:project_tags] ||= []
     # User can change the Project tag string
@@ -47,6 +53,10 @@ class CapifyEc2
     @instances = []
     @elbs = elb.load_balancers
 
+    # With ALBs, we are only interested in the target groups that contain
+    # instances.
+    @alb_target_groups = @alb_client.describe_target_groups()
+
     regions.each do |region|
       begin
         servers = Fog::Compute.new( {:provider => 'AWS', :region => region}.merge!(security_credentials) ).servers
@@ -54,7 +64,7 @@ class CapifyEc2
         puts "[Capify-EC2] Unable to connect to AWS: #{e}.".red.bold
         exit 1
       end
-      
+
       servers.each do |server|
         @instances << server if server.ready?
       end
@@ -117,7 +127,7 @@ class CapifyEc2
     info_label_width = [@ec2_config[:aws_project_tag], @ec2_config[:aws_stages_tag]].map(&:length).max
     puts "#{@ec2_config[:aws_project_tag].rjust( info_label_width ).bold}: #{@ec2_config[:project_tags].join(', ')}." if @ec2_config[:project_tags].any?
     puts "#{@ec2_config[:aws_stages_tag].rjust( info_label_width ).bold}: #{@ec2_config[:stage]}." unless @ec2_config[:stage].to_s.empty?
-    
+
     # Title row.
     status_output = []
     status_output << 'Num'                                                         .bold
@@ -131,7 +141,7 @@ class CapifyEc2
     status_output << @ec2_config[:aws_options_tag].ljust( column_widths[:options] ).bold if options_present
     status_output << 'CPU'                       .ljust( 16                      ).bold if graph
     puts status_output.join("   ")
-    
+
     desired_instances.each_with_index do |instance, i|
       status_output = []
       status_output << "%02d:" % i
@@ -155,7 +165,7 @@ class CapifyEc2
     end
     puts "Elastic Load Balancers".bold
     puts "#{@ec2_config[:aws_project_tag].bold}: #{@ec2_config[:project_tags].join(', ')}." if @ec2_config[:project_tags].any?
-    
+
     # Set minimum widths for the variable length lb attributes.
     column_widths = { :id_min => 4, :dns_min => 4, :zone_min => 5}
 
@@ -174,7 +184,7 @@ class CapifyEc2
     elbs_found_for_project = false
 
     @elbs.each_with_index do |lb, i|
-      
+
       status_output = []
       sub_output    = []
       lb.instances.each do |instance|
@@ -201,7 +211,7 @@ class CapifyEc2
         status_output << (lb.id || '')                   .ljust( column_widths[:id]   ).green
         status_output << lb.dns_name                     .ljust( column_widths[:dns]  ).blue.bold
         status_output << lb.availability_zones.join(",") .ljust( column_widths[:zone] ).magenta
-      
+
         puts status_output.join("   ")
         puts sub_output.join("\n")
       end
@@ -234,6 +244,11 @@ class CapifyEc2
   def get_instances_by_region(roles, region)
     return unless region
     desired_instances.select {|instance| instance.availability_zone.match(region) && instance.tags[@ec2_config[:aws_roles_tag]].split(%r{,\s*}).include?(roles.to_s) rescue false}
+  end
+
+  def is_vpc_instance?(instance)
+    # Determine if instance is based in VPC or classic
+    @ec2_client.describe_instances({instance_ids: [instance.id]}).reservations[0].instances[0].vpc_id
   end
 
   def get_instance_by_name(name)
@@ -282,6 +297,13 @@ class CapifyEc2
     return if !@ec2_config[:load_balanced]
     instance = get_instance_by_name(instance_name)
     return if instance.nil?
+
+    # Check if the instance is a VPC instance, return if it is
+    if is_vpc_instance?(instance)
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance.id}') from ELB registration..."
+      return []
+    end
+
     load_balancer =  get_load_balancer_by_name(load_balancer_name) || @@load_balancer
     return if load_balancer.nil?
 
@@ -305,8 +327,79 @@ class CapifyEc2
     end
   end
 
+  def deregister_instance_from_target_groups_by_dns(server_dns, target_group_names)
+    instance = get_instance_by_dns(server_dns)
+
+    # Check if the instance is a VPC instance, if not return
+    if not is_vpc_instance?(instance)
+      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance.id}') from target groups..."
+      return []
+    end
+
+    deregistered_target_groups = []
+
+    for target_group in target_group_names do
+      puts "[Capify-EC2] Removing instance '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
+      # Instance deregistration requires the ALB target group ARN and the instance ID
+      # Obtain target group ARN from target group name assuming the name is unique.
+      target_group_arn = @alb_client.describe_target_groups({
+        names: [target_group],
+      })['target_groups'][0]['target_group_arn']
+
+      # Deregister the instance with the target group ARN
+      @alb_client.deregister_targets({
+        target_group_arn: target_group_arn,
+        targets: [ { id: instance.id } ]
+      })
+
+      # Loop until instance is deregistered or timeout is reached
+      begin
+        Timeout::timeout(5) do
+          begin
+            # Verify the instance is no longer in the target group
+            response = @alb_client.describe_target_health({
+              target_group_arn: target_group_arn,
+              targets: [ { id: instance.id } ]
+            })
+
+            # Instance is deregistered when state == unused or draining
+            # NOTE: A draining instance is still in active use, this should be
+            # refactored out when the pipeline is next reviewed.
+            state = response.target_health_descriptions[0].target_health.state
+            raise state unless state == 'unused' or state == 'draining'
+
+            # Instance is in unused or draining state, mark as a successful removal
+            puts "[Capify-EC2] Instance '#{server_dns}' ('#{instance.id}') is in state #{state}."
+            puts "[Capify-EC2] Successfully removed '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
+            deregistered_target_groups << target_group
+
+          rescue
+            # Instance is still attached, retrying after 1s sleep until timeout reached
+            puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retring..."
+            sleep 1
+            retry
+          end
+        end
+
+      rescue Timeout::Error
+        # Instance failed to reach unused state within the timeout
+        puts "[Capify-EC2] Failed to remove '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'"
+        puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+        puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
+      end
+    end
+    deregistered_target_groups
+  end
+
   def deregister_instance_from_named_elbs_by_dns(server_dns, load_balancer_names)
     instance = get_instance_by_dns(server_dns)
+
+    # Check if the instance is a VPC instance, return if it is
+    if is_vpc_instance?(instance)
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance.id}') from ELB deregistration..."
+      return []
+    end
+
 
     lbs = []
     threads = []
@@ -352,10 +445,73 @@ class CapifyEc2
     false
   end
 
+  def reregister_instance_with_target_group_by_dns(server_dns, target_group, timeout)
+    instance = get_instance_by_dns(server_dns)
+
+    # Check if the instance is a VPC instance, if not return
+    if not is_vpc_instance?(instance)
+      puts "[Capify-EC2] Skipping non-VPC instance '#{server_dns}' ('#{instance.id}') from target group '#{target_group}'..."
+      return []
+    end
+
+    puts "[Capify-EC2] Re-registering instance with ALB target group '#{target_group}'..."
+
+    # Instance registration requires the ALB target group ARN and the instance ID
+    # Obtain target group ARN from target group name assuming the name is unique.
+    target_group_arn = @alb_client.describe_target_groups({
+      names: [target_group],
+    })['target_groups'][0]['target_group_arn']
+
+    # Register the instance with the target group ARN
+    @alb_client.register_targets({
+      target_group_arn: target_group_arn,
+      targets: [ { id: instance.id } ]
+    })
+
+    state = nil
+
+    # Loop until instance is registered and healthy or timeout is reached
+    begin
+      Timeout::timeout(timeout) do
+        begin
+          # Verify the instance is healthy
+          response = @alb_client.describe_target_health({
+            target_group_arn: target_group_arn,
+            targets: [ { id: instance.id } ]
+          })
+
+          # Instance is healthy when state == healthy
+          state = response.target_health_descriptions[0].target_health.state
+          raise state unless state == 'healthy'
+
+          # Instance is in healthy state, mark as a successful
+          puts "[Capify-EC2] Successfully added '#{server_dns}' ('#{instance.id}') to target group '#{target_group}'..."
+
+        rescue
+          # Instance is not healthy, retrying after 1s sleep until timeout reached
+          puts "[Capify-EC2] Instance #{instance.id} is currently in state #{state}, retrying..."
+          sleep 1
+          retry
+        end
+      end
+
+    rescue Timeout::Error
+      # Instance failed to become healthy within timeout
+      puts "[Capify-EC2] Failed to add '#{server_dns}' ('#{instance.id}') to target group '#{target_group}'"
+      puts "[Capify-EC2] Instance is in state '#{response.target_health_descriptions[0].target_health.state}' with description:"
+      puts "[Capify-EC2] #{response.target_health_descriptions[0].target_health.description}"
+    end
+    state ? state == 'healthy' : false
+  end
+
   def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
     instance = get_instance_by_dns(server_dns)
 
-    sleep 10
+    # Check if the instance is a VPC instance, if not return
+    if is_vpc_instance?(instance)
+      puts "[Capify-EC2] Skipping VPC instance '#{server_dns}' ('#{instance.id}') from ELB registration..."
+      return []
+    end
 
     puts "[Capify-EC2] Re-registering instance with ELB '#{load_balancer.id}'..."
     result = elb.register_instances_with_load_balancer(instance.id, load_balancer.id)
@@ -375,7 +531,8 @@ class CapifyEc2
           retry
         end
       end
-    rescue Timeout::Error => e
+    rescue Timeout::Error
+      puts "[Capify-EC2] Instance '#{instance.id}' failed to reach 'InService' state within timeout."
     end
     state ? state == 'InService' : false
   end
@@ -399,8 +556,8 @@ class CapifyEc2
     http = Net::HTTP.new(uri.host, uri.port)
 
     if uri.scheme == 'https'
-     http.use_ssl = true
-     http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+      http.use_ssl = true
+      http.verify_mode = OpenSSL::SSL::VERIFY_NONE
     end
 
     result = nil
@@ -420,7 +577,8 @@ class CapifyEc2
           retry
         end
       end
-    rescue Timeout::Error => e
+    rescue Timeout::Error
+      puts "[Capify-EC2] Instance '#{instance.id}' failed to healthcheck within timeout."
     end
     result ? response_matches_expected?(result.body, expected_response) : false
   end
